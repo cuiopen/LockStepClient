@@ -42,8 +42,6 @@ struct Player {
     int x;
     int y;
     int uid;
-
-    std::map<uint32, struct Player> mSights;
 };
 
 class Widget : public QWidget
@@ -75,12 +73,14 @@ private slots:
     void timeoutUpdate();
     void timeoutHeartbeat();
 
+public:
     ///////network///////
     void initCommand();
     void sendPacket(int, std::string&);
 
     void updateKeyInfoToServer();
-
+    void runKeyInfo(std::map<uint32, VeFrameInfo>& mOpInfo);
+    void logicFrameRefresh(struct FrameInfo& frameInfo);
     ///////
     void playerLogin();
     void playerMove(int, int);
@@ -91,6 +91,7 @@ private slots:
     bool handlerLogin(std::string&);
     bool handlerMove(std::string&);
     bool handlerHeartbeat(std::string&);
+    bool handlerFrameRefresh(std::string&);
     bool handlerFrameInit(std::string&);
 
 private:
@@ -101,7 +102,7 @@ private:
 
     /////////
     Buffer buf_;
-    struct Player play;
+    std::map<uint32, struct Player> mAllPlayer;
     std::map<uint32, ServiceFunc> command_;
     QString m_current_fps;
     QString m_current_rtt;
@@ -113,12 +114,11 @@ private:
     QTimer* m_heartbeat;
 
     uint32 upStep;
-    uint64 sumFrameAdd;
     uint64 curFrameId;
     uint64 nextFrameId;
 
     struct FrameInfo {
-        uint64 nextFrameId;
+        uint64 curFrameId;
         std::map<uint32, VeFrameInfo> mUidFrameInfo;
     };
 

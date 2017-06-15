@@ -16,6 +16,7 @@ Widget::~Widget()
     delete ui;
 }
 
+//逻辑帧 100ms
 void Widget::timeoutUpdate()
 {
     //帧同步 掉线之后，无法加入，
@@ -33,35 +34,48 @@ void Widget::timeoutUpdate()
     //乐观帧锁定， 不等待
     //是关键帧
 
-    if ( nextFrameId == curFrameId )
+}
+
+void Widget::logicFrameRefresh(struct FrameInfo& frameInfo)
+{
+    if ( curFrameId == frameInfo.curFrameId )
     {
-        MapServerFrameInfo::iterator it = mFrameInfo.find(nextFrameId);
-        if (it != mFrameInfo.end() )
-        {
-            //触发上报逻辑
-            updateKeyInfoToServer();
-            //得到下一帧的ID
-            nextFrameId = it->second.nextFrameId;
-            //执行操作的逻辑, 根据操作更新每个玩家信息
-
-            std::map<uint32, VeFrameInfo>
-            for (auto v : it->second.mUidFrameInfo)
-            {
-                if ( v.first == play.uid )
-                {
-                    play.x
-                }
-            }
-        }
-        else
-        {
-            //return等待数据
-            return;
-        }
-
+        //触发上报逻辑
+        //updateKeyInfoToServer();
+        //得到下一帧的ID
+        //nextFrameId = it->second.nextFrameId;
+        //执行操作的逻辑, 根据操作更新每个玩家信息
+        runKeyInfo(frameInfo.mUidFrameInfo);
     }
-    curFrameId++;
-    update();
+}
+
+void Widget::runKeyInfo(std::map<uint32, VeFrameInfo>& mOpInfo)
+{
+    // 逻辑帧运行
+    int step = 5;
+    for (auto uValue : mOpInfo) {
+        uint32 uid = uValue.first;
+        auto player = mAllPlayer.find(uid);
+        if (player != mAllPlayer.end()) continue;
+
+        for (auto fValue : uValue.second) {
+            switch(fValue) {
+                case E_PLAYER_KEY_UP:
+                    player->y -= step
+                    break;
+                case E_PLAYER_KEY_DOWN:
+                    player->y += step
+                    break;
+                case E_PLAYER_KEY_LEFT:
+                    player->x -= step
+                    break;
+                case E_PLAYER_KEY_RIGHT:
+                    player->x += step
+                    break;
+            }
+            update();
+        }
+    }
 }
 
 void Widget::timeoutHeartbeat()
@@ -86,6 +100,7 @@ void Widget::initCommand()
     REGISTER_CMD_CALLBACK(cs::ID_S2C_Move, handlerMove);
     REGISTER_CMD_CALLBACK(cs::ID_S2C_AllPos, handlerUpdateAllUsers);
     REGISTER_CMD_CALLBACK(cs::ID_S2C_Ping, handlerHeartbeat);
+    REGISTER_CMD_CALLBACK(cs::ID_S2C_Frame, handlerFrameRefresh);
 }
 
 void Widget::paintEvent(QPaintEvent *event)
@@ -110,33 +125,33 @@ void Widget::paintEvent(QPaintEvent *event)
         painter.drawEllipse(QPointF(item.second.x, item.second.y), 5, 5);
     }
 
-//    static QTime time;
-//    static int frames = 0;
-//    static bool started = false;
+   static QTime time;
+   static int frames = 0;
+   static bool started = false;
 
-//    if (!started || time.elapsed() > 1000)
-//    {
-//        qreal fps = frames * 1000. / time.elapsed();
-//        if (fps == 0)
-//            m_current_fps = "fps ";
-//        else
-//            m_current_fps = QString::fromLatin1("fps %3").arg((int) qRound(fps));
+   if (!started || time.elapsed() > 1000)
+   {
+       qreal fps = frames * 1000. / time.elapsed();
+       if (fps == 0)
+           m_current_fps = "fps ";
+       else
+           m_current_fps = QString::fromLatin1("fps %3").arg((int) qRound(fps));
 
-//        time.start();
-//        started = true;
-//        frames = 0;
-//    }
-//    else
-//    {
-//        ++frames;
-//        painter.setPen(QPen(QColor(52, 233, 48), 2));
-//        painter.setFont(QFont("times", 14));
-//        painter.drawText(width() - 100, 30, m_current_fps);
-//        //sklog_info("m_current_fps : %s", m_current_fps.toStdString().c_str());
+       time.start();
+       started = true;
+       frames = 0;
+   }
+   else
+   {
+       ++frames;
+       painter.setPen(QPen(QColor(52, 233, 48), 2));
+       painter.setFont(QFont("times", 14));
+       painter.drawText(width() - 100, 30, m_current_fps);
+       //sklog_info("m_current_fps : %s", m_current_fps.toStdString().c_str());
 
-//        painter.setFont(QFont("rtt", 14));
-//        painter.drawText(width() - 100, 50, m_current_rtt);
-//    }
+       painter.setFont(QFont("rtt", 14));
+       painter.drawText(width() - 100, 50, m_current_rtt);
+   }
 
 }
 
@@ -207,6 +222,11 @@ void Widget::init()
     m_heartbeat = new QTimer;
     connect(m_heartbeat,SIGNAL(timeout()),this,SLOT(timeoutHeartbeat()));
     m_heartbeat->start(10000);//10s 心跳
+
+    ////////渲染帧////////////
+    m_timer = new QTimer;
+    connect(m_timer,SIGNAL(timeout()),this,SLOT(timeoutUpdate()));
+    m_timer->start(16); //60帧
 
     /////////frame//////// 1s  50  20 * 5= 100 -> 10
 //    sumFrameAdd = 0;
@@ -339,13 +359,9 @@ bool Widget::handlerLogin(std::string& str)
         return false;
     }
 
-    //klog_info("handler login");
+    struct Player player(mapxBegin,mapyBegin,login.uid());
 
-    if ( play.uid ==  0 )
-    {
-        //klog_info("play.uid : %d, newId : %d", play.uid, login.uid());
-        play.uid = login.uid();
-    }
+    mAllPlayer.insert(std::make_pair(login.uid(), player));
 
     return true;
 }
@@ -359,20 +375,18 @@ bool Widget::handlerMove(std::string& str)
         return false;
     }
 
-    //klog_info("handlerMove");
-
     uint32 uid = move.dwuid();
     uint32 dwx = move.dwx();
     uint32 dwy = move.dwy();
 
     // 如果是自己, 则更新自己即可
-    if ( play.uid == uid )
-    {
-        play.x = dwx;
-        play.y = dwy;
-        update();
-        //klog_info("Self Change Pos %d %d", play.x, play.y);
-    }
+    // if ( play.uid == uid )
+    // {
+    //     play.x = dwx;
+    //     play.y = dwy;
+    //     update();
+    //     //klog_info("Self Change Pos %d %d", play.x, play.y);
+    // }
 
     return true;
 }
@@ -394,13 +408,6 @@ bool Widget::handlerUpdateAllUsers(std::string& str)
         p.x = user.dwx();
         p.y = user.dwy();
         p.uid = user.uid();
-
-        if ( user.uid() == play.uid)
-        {
-            play.x = p.x;
-            play.y = p.y;
-            continue;
-        }
 
         struct Player& otherPlay = play.mSights.insert(std::make_pair(p.uid, p)).first->second;
         otherPlay.x = p.x;
@@ -444,8 +451,33 @@ bool Widget::handlerFrameInit(std::string& str)
 
     curFrameId = frameinit.curframeid();
     nextFrameId = frameinit.nextframeid();
-    ////////update////////////
-    m_timer = new QTimer;
-    connect(m_timer,SIGNAL(timeout()),this,SLOT(timeoutUpdate()));
-    m_timer->start(10); //60帧 50ms 上报一次
+}
+
+bool Widget::handlerFrameRefresh(std::string&)
+{
+    cs::S2C_Frame frame;
+
+    if ( !frame.ParseFromString(str) )
+    {
+        klog_info("eroor parse proto");
+        return false;
+    }
+
+    struct FrameInfo frameInfo;
+    frameInfo.curFrameId = frame.frame_id();
+
+    int size = pos.users_size();
+    for (int i = 0; i < size; i++)
+    {
+        cs::UserFrame user = pos.users(i);
+        VeFrameInfo p;
+        for (int j = 0; j < user.key_info_size(); j++)
+        {
+            uint32 key = user.key_info(j);
+            p.push_back(key);
+        }
+    }
+
+    logicFrameRefresh(frameInfo);
+    curFrameId = frame.nextframe_id();
 }
