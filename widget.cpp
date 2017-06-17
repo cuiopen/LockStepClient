@@ -21,31 +21,22 @@ void Widget::timeoutUpdate()
 {
     //帧同步 掉线之后，无法加入，
     //因为 帧同步记录的是玩家的操作， 所以掉线之后，当前帧的ID已经改变了， 无法知道其他玩家当前的状态； 除非把所有玩家的操作全部保存下来， 等玩家重连上来， 全部发过去;
-
-    //客户端逻辑：
-    //1.        判断当前帧F是否关键帧K1：如果不是跳转（7）。
-    //2.        如果是关键帧，则察看有没有K1的UPDATE数据，如果没有的话重复2等待。
-    //3.        采集当前K1的输入作为CTRL数据与K1编号一起发送给服务器
-    //4.        从UPDATE K1中得到下一个关键帧的号码K2以及到下一个关键帧之间的输入数据I。
-    //5.        从这个关键帧到下 一个关键帧K2之间的虚拟输入都用I。
-    //6.        令K1 = K2。
-    //7.        执行该帧逻辑
-    //8.        跳转（1）
-    //乐观帧锁定， 不等待
-    //是关键帧
-
+    update();
 }
 
 void Widget::logicFrameRefresh(struct FrameInfo& frameInfo)
 {
+    //klog_info("curId : %d, netId : %d", curFrameId, frameInfo.curFrameId);
+    //std::cout << "curId : " << curFrameId << "frameInfo : " << frameInfo.curFrameId << std::endl;
     if ( curFrameId == frameInfo.curFrameId )
     {
         //触发上报逻辑
-        //updateKeyInfoToServer();
+        updateKeyInfoToServer();
         //得到下一帧的ID
         //nextFrameId = it->second.nextFrameId;
         //执行操作的逻辑, 根据操作更新每个玩家信息
         runKeyInfo(frameInfo.mUidFrameInfo);
+        //curFrameId = frameInfo.nextFrameId;
     }
 }
 
@@ -53,26 +44,29 @@ void Widget::runKeyInfo(std::map<uint32, VeFrameInfo>& mOpInfo)
 {
     // 逻辑帧运行
     int step = 5;
+    //std::cout << "mOpInfo : " << mOpInfo.size() << std::endl;
     for (auto uValue : mOpInfo) {
         uint32 uid = uValue.first;
         auto player = mAllPlayer.find(uid);
-        if (player != mAllPlayer.end()) continue;
+        if (player == mAllPlayer.end()) continue;
 
         for (auto fValue : uValue.second) {
+            std::cout << "fValue : " << fValue << std::endl;
             switch(fValue) {
                 case E_PLAYER_KEY_UP:
-                    player->y -= step
+                    player->second.y -= step;
                     break;
                 case E_PLAYER_KEY_DOWN:
-                    player->y += step
+                    player->second.y += step;
                     break;
                 case E_PLAYER_KEY_LEFT:
-                    player->x -= step
+                    player->second.x -= step;
                     break;
                 case E_PLAYER_KEY_RIGHT:
-                    player->x += step
+                    player->second.x += step;
                     break;
             }
+            //std::cout << "update : " << std::endl;
             update();
         }
     }
@@ -101,6 +95,9 @@ void Widget::initCommand()
     REGISTER_CMD_CALLBACK(cs::ID_S2C_AllPos, handlerUpdateAllUsers);
     REGISTER_CMD_CALLBACK(cs::ID_S2C_Ping, handlerHeartbeat);
     REGISTER_CMD_CALLBACK(cs::ID_S2C_Frame, handlerFrameRefresh);
+    REGISTER_CMD_CALLBACK(cs::ID_S2C_FrameInit, handlerFrameInit);
+    REGISTER_CMD_CALLBACK(cs::ID_S2C_Ready, handlerReady);
+    REGISTER_CMD_CALLBACK(cs::ID_S2C_Sight, handlerSight);
 }
 
 void Widget::paintEvent(QPaintEvent *event)
@@ -118,9 +115,8 @@ void Widget::paintEvent(QPaintEvent *event)
     painter.drawRect(QRect(mapxBegin,mapyBegin, mapxEnd, mapyEnd));
     QBrush brush(Qt::black);
     painter.setBrush(brush);
-    painter.drawEllipse(QPointF(play.x, play.y), 5, 5);
 
-    for (auto item : play.mSights)
+    for (auto item : mAllPlayer)
     {
         painter.drawEllipse(QPointF(item.second.x, item.second.y), 5, 5);
     }
@@ -160,43 +156,50 @@ void Widget::mousePressEvent(QMouseEvent *e)
 
 }
 
+void Widget::keyInfoOp(uint32 dwop)
+{
+    if ( tcpSocket->state() != QAbstractSocket::ConnectedState ) return;
+
+    std::unique_lock<std::mutex> lck(mtx);
+    vCurFrameInfo.push_back(dwop);
+    //klog_info("keyinfo >>>> size : %d", vCurFrameInfo.size());
+}
+
 void Widget::keyPressEvent(QKeyEvent *e)
 {
     int step = 5;
-    int& x = play.x;
-    int& y = play.y;
-
-    std::unique_lock<std::mutex> lck(mtx);
 
     switch (e->key())
     {
         case Qt::Key_W :
         {
             //y = y-step; playerMove(x, y);
-            vCurFrameInfo.push_back(E_PLAYER_KEY_UP);
+            keyInfoOp(E_PLAYER_KEY_UP);
             break;
         }
         case Qt::Key_S :
         {
             //y = y+step; playerMove(x, y);
-            vCurFrameInfo.push_back(E_PLAYER_KEY_DOWN);
+            keyInfoOp(E_PLAYER_KEY_DOWN);
             break;
         }
         case Qt::Key_A :
         {
             //x = x-step; playerMove(x, y);
-            vCurFrameInfo.push_back(E_PLAYER_KEY_LEFT);
+            keyInfoOp(E_PLAYER_KEY_LEFT);
             break;
         }
         case Qt::Key_D :
         {
             //x = x+step; playerMove(x, y);
-            vCurFrameInfo.push_back(E_PLAYER_KEY_RIGHT);
+            keyInfoOp(E_PLAYER_KEY_RIGHT);
             break;
         }
         //connect server
         case Qt::Key_Space : connectServer(); break;
+        case Qt::Key_R: playerReady(); break;
     }
+
 }
 
 void Widget::init()
@@ -206,8 +209,7 @@ void Widget::init()
     mapyBegin = 10;
     mapxEnd = mapxBegin + 500;
     mapyEnd = mapyBegin + 500;
-    play.x = mapxBegin;
-    play.y = mapyBegin;
+    dwUid = 0;
     this->setFixedSize(mapxEnd + 20, mapyEnd + 20);
     /////////network/////////
     this->tcpSocket = new QTcpSocket(this);
@@ -289,7 +291,7 @@ void Widget::sendPacket(int cmdId, std::string& msg)
 
     pkt.len = PACKET_HEAD_LEN + msg.size();
     pkt.cmd = cmdId;
-    pkt.uid = play.uid;
+    pkt.uid = this->dwUid;
     pkt.msg = msg;
 
     char* msg_ = new char[pkt.len];
@@ -308,13 +310,13 @@ void Widget::updateKeyInfoToServer()
 {
     cs::C2S_Frame frame;
     uint32* uFrame;
-    frame.set_uid(play.uid);
-    frame.set_frameId(curFrameId);
+    frame.set_uid(dwUid);
+    frame.set_frameid(curFrameId);
 
     std::unique_lock<std::mutex> lck(mtx);
     for (std::vector<uint32>::iterator it = vCurFrameInfo.begin(); it != vCurFrameInfo.end(); ++it )
     {
-        frame.add_keyInfo(*it);
+        frame.add_key_info(*it);
     }
     vCurFrameInfo.clear();
 
@@ -349,6 +351,16 @@ void Widget::playerAttack()
 
 }
 
+void Widget::playerReady()
+{
+    cs::C2S_Ready ready;
+
+    std::string msg;
+    msg = ready.SerializeAsString();
+    sendPacket(uint32(cs::ProtoID::ID_C2S_Ready), msg);
+}
+
+
 ////////////////////
 bool Widget::handlerLogin(std::string& str)
 {
@@ -358,8 +370,13 @@ bool Widget::handlerLogin(std::string& str)
         klog_info("eroor parse proto");
         return false;
     }
-
-    struct Player player(mapxBegin,mapyBegin,login.uid());
+    if (dwUid != 0)
+    {
+        klog_info("invalid handlerLogin >>>> dwUid : %d", dwUid);
+        return false;
+    }
+    dwUid = login.uid();
+    struct Player player(mapxBegin,mapyBegin, login.uid());
 
     mAllPlayer.insert(std::make_pair(login.uid(), player));
 
@@ -409,7 +426,7 @@ bool Widget::handlerUpdateAllUsers(std::string& str)
         p.y = user.dwy();
         p.uid = user.uid();
 
-        struct Player& otherPlay = play.mSights.insert(std::make_pair(p.uid, p)).first->second;
+        struct Player& otherPlay = mAllPlayer.insert(std::make_pair(p.uid, p)).first->second;
         otherPlay.x = p.x;
         otherPlay.y = p.y;
     }
@@ -449,11 +466,12 @@ bool Widget::handlerFrameInit(std::string& str)
         return false;
     }
 
-    curFrameId = frameinit.curframeid();
-    nextFrameId = frameinit.nextframeid();
+    curFrameId = frameinit.cur_frame_id();
+    nextFrameId = frameinit.next_frame_id();
+    klog_info("handler FrameInit");
 }
 
-bool Widget::handlerFrameRefresh(std::string&)
+bool Widget::handlerFrameRefresh(std::string& str)
 {
     cs::S2C_Frame frame;
 
@@ -465,19 +483,54 @@ bool Widget::handlerFrameRefresh(std::string&)
 
     struct FrameInfo frameInfo;
     frameInfo.curFrameId = frame.frame_id();
-
-    int size = pos.users_size();
+    frameInfo.nextFrameId = frame.nextframe_id();
+    //klog_info("handlerFrameRefresh : c : %d, n : %d", frame.frame_id(), frame.nextframe_id());
+    int size = frame.users_size();
     for (int i = 0; i < size; i++)
     {
-        cs::UserFrame user = pos.users(i);
+        cs::UserFrame user = frame.users(i);
+
         VeFrameInfo p;
         for (int j = 0; j < user.key_info_size(); j++)
         {
             uint32 key = user.key_info(j);
             p.push_back(key);
         }
+        frameInfo.mUidFrameInfo.insert(std::make_pair(user.uid(), p));
     }
 
     logicFrameRefresh(frameInfo);
     curFrameId = frame.nextframe_id();
+}
+
+bool Widget::handlerReady(std::string& str)
+{
+    cs::S2C_Ready sready;
+
+    if ( !sready.ParseFromString(str) )
+    {
+        klog_info("eroor parse proto");
+        return false;
+    }
+}
+
+bool Widget::handlerSight(std::string& str)
+{
+    cs::S2C_Sight ssight;
+
+    if ( !ssight.ParseFromString(str) )
+    {
+        klog_info("eroor parse proto");
+        return false;
+    }
+
+    klog_info("handlerSight");
+
+    int size = ssight.users_size();
+    for (int i = 0; i < size; i++)
+    {
+        cs::User user = ssight.users(i);
+        struct Player player(user.dwx(), user.dwy(), user.uid());
+        mAllPlayer.insert(std::make_pair(user.uid(), player));
+    }
 }

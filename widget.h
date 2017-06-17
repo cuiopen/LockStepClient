@@ -39,6 +39,7 @@ struct PACKET {
 
 struct Player {
     Player():x(0), y(0), uid(0) {}
+    Player(int x_, int y_, int z_):x(x_), y(y_), uid(z_) {}
     int x;
     int y;
     int uid;
@@ -56,6 +57,13 @@ public:
         E_PLAYER_KEY_RIGHT = 4,
     };
     typedef std::vector<uint32> VeFrameInfo;
+    struct FrameInfo {
+        uint32 curFrameId;
+        uint32 nextFrameId;
+        std::map<uint32, VeFrameInfo> mUidFrameInfo;
+    };
+
+
     typedef std::map<uint64, FrameInfo> MapServerFrameInfo;
     typedef std::function<bool(std::string&)> ServiceFunc;
     explicit Widget(QWidget *parent = 0);
@@ -81,10 +89,12 @@ public:
     void updateKeyInfoToServer();
     void runKeyInfo(std::map<uint32, VeFrameInfo>& mOpInfo);
     void logicFrameRefresh(struct FrameInfo& frameInfo);
+    void keyInfoOp(uint32 dwop);
     ///////
     void playerLogin();
     void playerMove(int, int);
     void playerAttack();
+    void playerReady();
 
     ///////////
     bool handlerUpdateAllUsers(std::string& str);
@@ -93,6 +103,8 @@ public:
     bool handlerHeartbeat(std::string&);
     bool handlerFrameRefresh(std::string&);
     bool handlerFrameInit(std::string&);
+    bool handlerReady(std::string&);
+    bool handlerSight(std::string&);
 
 private:
     int mapxBegin;
@@ -102,25 +114,19 @@ private:
 
     /////////
     Buffer buf_;
+    uint32 dwUid;
     std::map<uint32, struct Player> mAllPlayer;
     std::map<uint32, ServiceFunc> command_;
     QString m_current_fps;
     QString m_current_rtt;
     QTimer* m_timer;
-    /////
-    /// \brief m_heartbeat
-    ///
+
     uint32 sendTime;
     QTimer* m_heartbeat;
 
     uint32 upStep;
     uint64 curFrameId;
     uint64 nextFrameId;
-
-    struct FrameInfo {
-        uint64 curFrameId;
-        std::map<uint32, VeFrameInfo> mUidFrameInfo;
-    };
 
     MapServerFrameInfo mFrameInfo;
     ///////////
